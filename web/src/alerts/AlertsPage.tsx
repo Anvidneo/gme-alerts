@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react';
 import { apiFetch } from '../api';
 import { errorMessage, useApi } from '../useApi';
 import { AlertsTable } from './AlertsTable';
-import { SEVERITIES, SEVERITY_LABEL } from './labels';
+import { endOfLocalDay, SEVERITIES, SEVERITY_LABEL, startOfLocalDay } from './labels';
 import { SummaryCards } from './SummaryCards';
 import { Alert, AlertList, AlertStatus, AlertSummary, Me, Role, Severity } from './types';
 
 const PAGE_SIZE = 10;
 const CAN_ACKNOWLEDGE: Role[] = ['admin', 'operator'];
+// Cada cuánto se vuelven a pedir la lista y el resumen para ver cambios de otras personas.
+const REFRESH_MS = 30_000;
 
 const STATUS_OPTIONS: { value: AlertStatus | ''; label: string }[] = [
   { value: '', label: 'Todos' },
@@ -23,6 +25,9 @@ const SEVERITY_OPTIONS: { value: Severity | ''; label: string }[] = [
 export function AlertsPage({ token }: { token: string }) {
   const [status, setStatus] = useState<AlertStatus | ''>('');
   const [severity, setSeverity] = useState<Severity | ''>('');
+  // Días en formato YYYY-MM-DD, tal como los entrega <input type="date">.
+  const [fromDay, setFromDay] = useState('');
+  const [toDay, setToDay] = useState('');
   const [page, setPage] = useState(0);
   // Al incrementarlo se recargan la lista y el resumen (tras reconocer o al reintentar).
   const [reloadKey, setReloadKey] = useState(0);
@@ -32,6 +37,8 @@ export function AlertsPage({ token }: { token: string }) {
   const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE) });
   if (status) params.set('status', status);
   if (severity) params.set('severity', severity);
+  if (fromDay) params.set('from', startOfLocalDay(fromDay));
+  if (toDay) params.set('to', endOfLocalDay(toDay));
 
   const me = useApi<Me>(token, '/me');
   const summary = useApi<AlertSummary>(token, '/alerts/summary', reloadKey);
@@ -51,6 +58,30 @@ export function AlertsPage({ token }: { token: string }) {
   }, [alerts.loading, alerts.data, page, pageCount]);
 
   const reload = () => setReloadKey((key) => key + 1);
+
+  // Refresco automático: otra persona puede reconocer alertas o pueden llegar nuevas.
+  // No se consulta mientras la pestaña está oculta; al volver a ella se actualiza de inmediato.
+  useEffect(() => {
+    const refreshIfVisible = () => {
+      if (document.visibilityState === 'visible') reload();
+    };
+    const timer = window.setInterval(refreshIfVisible, REFRESH_MS);
+    document.addEventListener('visibilitychange', refreshIfVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', refreshIfVisible);
+    };
+  }, []);
+
+  const hasFilters = status !== '' || severity !== '' || fromDay !== '' || toDay !== '';
+
+  function clearFilters() {
+    setStatus('');
+    setSeverity('');
+    setFromDay('');
+    setToDay('');
+    setPage(0);
+  }
 
   async function acknowledge(alert: Alert) {
     setAcknowledgingId(alert.id);
@@ -106,6 +137,48 @@ export function AlertsPage({ token }: { token: string }) {
               setPage(0);
             }}
           />
+          <div className="chip-group">
+            <span className="chip-group-label">Fecha</span>
+            <label className="date-field">
+              Desde
+              <input
+                type="date"
+                value={fromDay}
+                max={toDay || undefined}
+                onChange={(e) => {
+                  const day = e.target.value;
+                  setFromDay(day);
+                  // Un rango invertido no tiene sentido: se arrastra la otra fecha al mismo día.
+                  if (day && toDay && day > toDay) setToDay(day);
+                  setPage(0);
+                }}
+              />
+            </label>
+            <label className="date-field">
+              Hasta
+              <input
+                type="date"
+                value={toDay}
+                min={fromDay || undefined}
+                onChange={(e) => {
+                  const day = e.target.value;
+                  setToDay(day);
+                  if (day && fromDay && day < fromDay) setFromDay(day);
+                  setPage(0);
+                }}
+              />
+            </label>
+          </div>
+          <div className="toolbar-actions">
+            {hasFilters && (
+              <button type="button" className="btn btn-secondary" onClick={clearFilters}>
+                Limpiar filtros
+              </button>
+            )}
+            <button type="button" className="btn btn-secondary" onClick={reload}>
+              Actualizar
+            </button>
+          </div>
         </div>
 
         {me.error && (

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ApiError, apiFetch } from './api';
 
 export interface ApiState<T> {
@@ -18,16 +18,26 @@ export const errorMessage = (err: unknown) =>
 // así una respuesta lenta y vieja nunca pisa a la más reciente.
 export function useApi<T>(token: string, path: string, reloadKey = 0): ApiState<T> {
   const [state, setState] = useState<ApiState<T>>({ loading: true });
+  // Recurso (token + ruta) al que corresponden los datos que hay en `state`.
+  const loaded = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     const controller = new AbortController();
-    // Se conservan los datos anteriores mientras carga, para que la tabla no parpadee.
-    setState((previous) => ({ data: previous.data, loading: true }));
+    const resource = `${token} ${path}`;
+    // Si solo cambió `reloadKey` es un refresco de lo que ya se ve: se actualiza en
+    // segundo plano, sin marcar "cargando", para que el refresco periódico no parpadee.
+    const isRefresh = loaded.current === resource;
+    // Se conservan los datos anteriores mientras carga, para que la tabla no salte.
+    setState((previous) => ({ data: previous.data, loading: !(isRefresh && previous.data) }));
 
     apiFetch<T>(token, path, { signal: controller.signal })
-      .then((data) => setState({ data, loading: false }))
+      .then((data) => {
+        loaded.current = resource;
+        setState({ data, loading: false });
+      })
       .catch((err) => {
         if (controller.signal.aborted) return;
+        loaded.current = undefined;
         setState({ error: errorMessage(err), loading: false });
       });
 

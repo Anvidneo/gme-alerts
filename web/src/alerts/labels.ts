@@ -29,3 +29,9 @@ export const typeLabel = (type: string) => TYPE_LABEL[type] ?? type;
 const dateFormat = new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium', timeStyle: 'short' });
 
 export const formatDate = (iso: string) => dateFormat.format(new Date(iso));
+
+// Los campos de fecha dan un día (YYYY-MM-DD) en la zona del usuario, la misma en que la tabla
+// muestra las fechas. Se convierten al instante exacto en que empieza o termina ese día local,
+// porque la API interpreta una fecha sin hora como día UTC.
+export const startOfLocalDay = (day: string) => new Date(`${day}T00:00:00`).toISOString();
+export const endOfLocalDay = (day: string) => new Date(`${day}T23:59:59.999`).toISOString();
