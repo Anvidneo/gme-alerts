@@ -193,4 +193,134 @@ describe('Alertas (e2e)', () => {
       expect((await alertRow(id)).acknowledged_by).toBe(winner.body.acknowledgedBy);
     });
   });
+
+  describe('GET /alerts: filtros y total', () => {
+    const list = (token: string, qs = '') =>
+      request(app.getHttpServer()).get(`/api/alerts${qs}`).set(as(token));
+
+    // Oráculo independiente: cuenta directo en la BD con el mismo criterio.
+    const count = async (tenant: string, where = 'TRUE', params: unknown[] = []) => {
+      const { rows } = await pool.query(
+        `SELECT COUNT(*)::int AS n FROM alerts WHERE tenant_id = $1 AND ${where}`,
+        [tenant, ...params],
+      );
+      return rows[0].n as number;
+    };
+
+    it('devuelve el total de las alertas del distribuidor', async () => {
+      const res = await list('dev-norte-admin', '?limit=5').expect(200);
+
+      expect(res.body.items).toHaveLength(5);
+      expect(res.body.total).toBe(await count('dist-norte'));
+      expect(res.body).toMatchObject({ limit: 5, offset: 0 });
+    });
+
+    it('filtra por severidad', async () => {
+      const res = await list('dev-norte-admin', '?severity=critical&limit=100').expect(200);
+
+      expect(res.body.items.length).toBeGreaterThan(0);
+      expect(res.body.items.every((a: any) => a.severity === 'critical')).toBe(true);
+      expect(res.body.total).toBe(await count('dist-norte', `severity = $2`, ['critical']));
+    });
+
+    it('filtra por dispositivo', async () => {
+      const res = await list('dev-norte-admin', '?deviceId=dist-norte-veh-02&limit=100').expect(200);
+
+      expect(res.body.items.length).toBeGreaterThan(0);
+      expect(res.body.items.every((a: any) => a.deviceId === 'dist-norte-veh-02')).toBe(true);
+      expect(res.body.total).toBe(await count('dist-norte', `device_id = $2`, ['dist-norte-veh-02']));
+    });
+
+    it('filtra por rango de fechas con hora (inclusivo)', async () => {
+      const from = '2026-10-02T00:00:00Z';
+      const to = '2026-10-03T00:00:00Z';
+      const res = await list('dev-norte-admin', `?from=${from}&to=${to}&limit=100`).expect(200);
+
+      expect(res.body.total).toBe(
+        await count('dist-norte', 'created_at >= $2 AND created_at <= $3', [from, to]),
+      );
+      expect(
+        res.body.items.every((a: any) => a.createdAt >= from && a.createdAt <= '2026-10-03T00:00:00.000Z'),
+      ).toBe(true);
+    });
+
+    it('con "to" solo fecha incluye el día completo', async () => {
+      const res = await list('dev-norte-admin', '?from=2026-10-04&to=2026-10-04&limit=100').expect(200);
+
+      expect(res.body.total).toBe(
+        await count(
+          'dist-norte',
+          `created_at >= '2026-10-04T00:00:00Z' AND created_at < '2026-10-05T00:00:00Z'`,
+        ),
+      );
+      expect(res.body.total).toBeGreaterThan(0);
+      expect(res.body.items.every((a: any) => a.createdAt.startsWith('2026-10-04'))).toBe(true);
+      // Hay alertas de ese día después de las 12:00: un "to" mal interpretado como medianoche las perdería.
+      expect(res.body.items.some((a: any) => a.createdAt >= '2026-10-04T12:00:00')).toBe(true);
+    });
+
+    it('combina severidad, estado, dispositivo y fechas', async () => {
+      const res = await list(
+        'dev-sur-admin',
+        '?severity=high&status=open&from=2026-10-01&to=2026-10-06&limit=100',
+      ).expect(200);
+
+      expect(res.body.items.every((a: any) => a.severity === 'high' && a.status === 'open')).toBe(true);
+      expect(res.body.total).toBe(
+        await count(
+          'dist-sur',
+          `severity = 'high' AND status = 'open' AND created_at >= '2026-10-01' AND created_at < '2026-10-07'`,
+        ),
+      );
+    });
+
+    it('el total no depende de limit/offset y la paginación es coherente', async () => {
+      const first = await list('dev-norte-admin', '?status=open&limit=3&offset=0').expect(200);
+      const second = await list('dev-norte-admin', '?status=open&limit=3&offset=3').expect(200);
+      const beyond = await list('dev-norte-admin', '?status=open&limit=3&offset=100000').expect(200);
+
+      expect(first.body.total).toBe(second.body.total);
+      expect(first.body.total).toBe(await count('dist-norte', `status = 'open'`));
+      expect(first.body.items).toHaveLength(3);
+      const ids = [...first.body.items, ...second.body.items].map((a: any) => a.id);
+      expect(new Set(ids).size).toBe(6);
+      expect(beyond.body.items).toEqual([]);
+      expect(beyond.body.total).toBe(first.body.total);
+    });
+
+    it('un filtro nunca mezcla datos de otro distribuidor', async () => {
+      const res = await list('dev-sur-admin', '?deviceId=dist-norte-veh-01').expect(200);
+
+      expect(res.body.items).toEqual([]);
+      expect(res.body.total).toBe(0);
+    });
+
+    it.each([
+      ['severidad inválida', '?severity=urgent'],
+      ['estado inválido', '?status=closed'],
+      ['fecha "from" inválida', '?from=ayer'],
+      ['fecha "to" inválida', '?to=2026-13-45'],
+      ['día inexistente', '?from=2026-02-30'],
+      ['día inexistente con desfase', '?to=2026-02-30T10:00:00%2B02:00'],
+      ['hora fuera de rango', '?from=2026-10-01T25:00:00Z'],
+      ['deviceId vacío', '?deviceId='],
+      ['limit en cero', '?limit=0'],
+      ['offset negativo', '?offset=-1'],
+      ['parámetro desconocido (typo)', '?severty=high'],
+    ])('responde 400 con %s', async (_name, qs) => {
+      const res = await list('dev-norte-admin', qs).expect(400);
+
+      expect(res.body.message).toBeTruthy();
+    });
+
+    it('responde 400 si "from" es posterior a "to"', async () => {
+      const res = await list('dev-norte-admin', '?from=2026-10-05&to=2026-10-01').expect(400);
+
+      expect(res.body.message).toContain('"from"');
+    });
+
+    it('acepta from y to iguales en un mismo día sin hora', async () => {
+      await list('dev-norte-admin', '?from=2026-10-05&to=2026-10-05').expect(200);
+    });
+  });
 });

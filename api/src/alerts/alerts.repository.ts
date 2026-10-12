@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../db/database.module';
 import { Alert } from './alert';
+import { DateRange } from './date-range';
 import { ListAlertsQuery } from './dto/list-alerts.query';
 
 const COLUMNS = `
@@ -20,24 +21,43 @@ const COLUMNS = `
 export class AlertsRepository {
   constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
 
-  async list(tenantId: string, query: ListAlertsQuery): Promise<Alert[]> {
+  async list(
+    tenantId: string,
+    query: ListAlertsQuery,
+    range: DateRange,
+  ): Promise<{ items: Alert[]; total: number }> {
     const params: unknown[] = [tenantId];
-    let where = 'tenant_id = $1';
-    if (query.status) {
-      params.push(query.status);
-      where += ` AND status = $${params.length}`;
-    }
-    params.push(query.limit, query.offset);
+    const conditions = ['tenant_id = $1'];
+    const add = (sql: (placeholder: string) => string, value: unknown) => {
+      params.push(value);
+      conditions.push(sql(`$${params.length}`));
+    };
 
-    const { rows } = await this.pool.query<Alert>(
-      `SELECT ${COLUMNS}
-         FROM alerts
-        WHERE ${where}
-        ORDER BY created_at DESC, id DESC
-        LIMIT $${params.length - 1} OFFSET $${params.length}`,
-      params,
-    );
-    return rows;
+    if (query.status) add((p) => `status = ${p}`, query.status);
+    if (query.severity) add((p) => `severity = ${p}`, query.severity);
+    if (query.deviceId) add((p) => `device_id = ${p}`, query.deviceId);
+    if (range.from) add((p) => `created_at >= ${p}`, range.from);
+    if (range.to) add((p) => `created_at ${range.to!.inclusive ? '<=' : '<'} ${p}`, range.to.value);
+
+    const where = conditions.join(' AND ');
+    const limitIndex = params.length + 1;
+
+    const [page, count] = await Promise.all([
+      this.pool.query<Alert>(
+        `SELECT ${COLUMNS}
+           FROM alerts
+          WHERE ${where}
+          ORDER BY created_at DESC, id DESC
+          LIMIT $${limitIndex} OFFSET $${limitIndex + 1}`,
+        [...params, query.limit, query.offset],
+      ),
+      this.pool.query<{ total: string }>(
+        `SELECT COUNT(*) AS total FROM alerts WHERE ${where}`,
+        params,
+      ),
+    ]);
+
+    return { items: page.rows, total: Number(count.rows[0].total) };
   }
 
   async findById(id: number, tenantId: string): Promise<Alert | undefined> {

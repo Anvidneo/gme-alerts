@@ -10,8 +10,8 @@ export class AlertsController {
 
   @Get()
   async list(@User() user: CurrentUser, @Query() query: ListAlertsQuery) {
-    const items = await this.service.list(user, query);
-    return { items, limit: query.limit, offset: query.offset };
+    const { items, total } = await this.service.list(user, query);
+    return { items, total, limit: query.limit, offset: query.offset };
   }
 
   @Patch(':id/ack')
