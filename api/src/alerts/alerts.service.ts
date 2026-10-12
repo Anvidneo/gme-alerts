@@ -13,13 +13,15 @@ export class AlertsService {
   }
 
   async acknowledge(user: CurrentUser, id: number): Promise<Alert> {
-    const alert = await this.repository.findById(id);
-    if (!alert) {
+    const acknowledged = await this.repository.acknowledge(id, user.tenantId, user.id);
+    if (acknowledged) {
+      return acknowledged;
+    }
+
+    const existing = await this.repository.findById(id, user.tenantId);
+    if (!existing) {
       throw new NotFoundException(`La alerta ${id} no existe`);
     }
-    if (alert.status === 'acknowledged') {
-      throw new ConflictException(`La alerta ${id} ya fue reconocida`);
-    }
-    return this.repository.acknowledge(id, user.id);
+    throw new ConflictException(`La alerta ${id} ya fue reconocida`);
   }
 }

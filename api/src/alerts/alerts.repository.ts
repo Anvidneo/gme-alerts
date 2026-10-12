@@ -40,23 +40,27 @@ export class AlertsRepository {
     return rows;
   }
 
-  async findById(id: number): Promise<Alert | undefined> {
+  async findById(id: number, tenantId: string): Promise<Alert | undefined> {
     const { rows } = await this.pool.query<Alert>(
-      `SELECT ${COLUMNS} FROM alerts WHERE id = $1`,
-      [id],
+      `SELECT ${COLUMNS} FROM alerts WHERE id = $1 AND tenant_id = $2`,
+      [id, tenantId],
     );
     return rows[0];
   }
 
-  async acknowledge(id: number, userId: string): Promise<Alert> {
+  // Un solo UPDATE condicional: solo cambia una alerta del tenant que siga abierta,
+  // así dos reconocimientos simultáneos no pueden ganar los dos.
+  async acknowledge(id: number, tenantId: string, userId: string): Promise<Alert | undefined> {
     const { rows } = await this.pool.query<Alert>(
       `UPDATE alerts
           SET status = 'acknowledged',
               acknowledged_at = now(),
-              acknowledged_by = $2
+              acknowledged_by = $3
         WHERE id = $1
+          AND tenant_id = $2
+          AND status = 'open'
         RETURNING ${COLUMNS}`,
-      [id, userId],
+      [id, tenantId, userId],
     );
     return rows[0];
   }
