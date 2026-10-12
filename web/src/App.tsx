@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { AlertsPage } from './alerts/AlertsPage';
 import { DEV_SESSIONS } from './session';
 
 export function App() {
@@ -21,7 +22,8 @@ export function App() {
       </header>
 
       <main>
-        <p className="placeholder">Aquí va la página de alertas.</p>
+        {/* `key` desmonta la página al cambiar de sesión: filtros, página y datos empiezan de cero. */}
+        <AlertsPage key={token} token={token} />
       </main>
     </div>
   );
