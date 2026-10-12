@@ -323,4 +323,93 @@ describe('Alertas (e2e)', () => {
       await list('dev-norte-admin', '?from=2026-10-05&to=2026-10-05').expect(200);
     });
   });
+
+  describe('GET /alerts/summary', () => {
+    const summary = (token: string) =>
+      request(app.getHttpServer()).get('/api/alerts/summary').set(as(token));
+
+    // Oráculo independiente: abiertas por severidad contadas directo en la BD.
+    const openCount = async (tenant: string, severity: string) => {
+      const { rows } = await pool.query(
+        `SELECT COUNT(*)::int AS n FROM alerts
+          WHERE tenant_id = $1 AND severity = $2 AND status = 'open'`,
+        [tenant, severity],
+      );
+      return rows[0].n as number;
+    };
+
+    const expected = async (tenant: string) => ({
+      low: await openCount(tenant, 'low'),
+      medium: await openCount(tenant, 'medium'),
+      high: await openCount(tenant, 'high'),
+      critical: await openCount(tenant, 'critical'),
+    });
+
+    it('rechaza peticiones sin token', async () => {
+      await request(app.getHttpServer()).get('/api/alerts/summary').expect(401);
+    });
+
+    it('cuenta las alertas abiertas del distribuidor por severidad', async () => {
+      const res = await summary('dev-norte-admin').expect(200);
+
+      expect(res.body).toEqual(await expected('dist-norte'));
+      expect(Object.values(res.body).some((n) => (n as number) > 0)).toBe(true);
+    });
+
+    it('cada distribuidor ve solo su propio resumen', async () => {
+      const norte = await summary('dev-norte-admin').expect(200);
+      const sur = await summary('dev-sur-admin').expect(200);
+
+      expect(norte.body).toEqual(await expected('dist-norte'));
+      expect(sur.body).toEqual(await expected('dist-sur'));
+      expect(norte.body).not.toEqual(sur.body);
+    });
+
+    it('no cuenta las alertas reconocidas', async () => {
+      const res = await summary('dev-norte-admin').expect(200);
+      const { rows } = await pool.query(
+        `SELECT COUNT(*)::int AS n FROM alerts WHERE tenant_id = 'dist-norte'`,
+      );
+      const totalOpen = Object.values(res.body).reduce((a: number, n) => a + (n as number), 0);
+
+      // En el seed hay reconocidas: si se contaran, la suma igualaría el total del distribuidor.
+      expect(totalOpen).toBeLessThan(rows[0].n);
+    });
+
+    it('devuelve las cuatro severidades aunque alguna no tenga alertas abiertas', async () => {
+      await pool.query(
+        `UPDATE alerts SET status = 'acknowledged', acknowledged_at = now(), acknowledged_by = 'u-norte-op'
+          WHERE tenant_id = 'dist-norte' AND severity = 'low'`,
+      );
+
+      const res = await summary('dev-norte-admin').expect(200);
+
+      expect(Object.keys(res.body).sort()).toEqual(['critical', 'high', 'low', 'medium']);
+      expect(res.body.low).toBe(0);
+    });
+
+    it('un usuario de solo lectura puede ver el resumen', async () => {
+      await summary('dev-norte-viewer').expect(200);
+    });
+
+    it('reconocer una alerta baja en uno el contador de su severidad', async () => {
+      const before = await summary('dev-norte-operator').expect(200);
+      const list = await request(app.getHttpServer())
+        .get('/api/alerts?status=open&limit=1')
+        .set(as('dev-norte-operator'))
+        .expect(200);
+      const alert = list.body.items[0];
+
+      await request(app.getHttpServer())
+        .patch(`/api/alerts/${alert.id}/ack`)
+        .set(as('dev-norte-operator'))
+        .expect(200);
+
+      const after = await summary('dev-norte-operator').expect(200);
+      expect(after.body).toEqual({
+        ...before.body,
+        [alert.severity]: before.body[alert.severity] - 1,
+      });
+    });
+  });
 });

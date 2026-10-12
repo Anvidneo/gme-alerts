@@ -14,6 +14,11 @@ export class AlertsController {
     return { items, total, limit: query.limit, offset: query.offset };
   }
 
+  @Get('summary')
+  summary(@User() user: CurrentUser) {
+    return this.service.summary(user);
+  }
+
   @Patch(':id/ack')
   @Roles('admin', 'operator')
   acknowledge(@User() user: CurrentUser, @Param('id', ParseIntPipe) id: number) {

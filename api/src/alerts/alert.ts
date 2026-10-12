@@ -13,3 +13,7 @@ export interface Alert {
   acknowledgedAt: string | null;
   acknowledgedBy: string | null;
 }
+
+export const SEVERITIES: Severity[] = ['low', 'medium', 'high', 'critical'];
+
+export type AlertSummary = Record<Severity, number>;

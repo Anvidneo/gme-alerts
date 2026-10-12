@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../db/database.module';
-import { Alert } from './alert';
+import { Alert, Severity } from './alert';
 import { DateRange } from './date-range';
 import { ListAlertsQuery } from './dto/list-alerts.query';
 
@@ -58,6 +58,18 @@ export class AlertsRepository {
     ]);
 
     return { items: page.rows, total: Number(count.rows[0].total) };
+  }
+
+  async countOpenBySeverity(tenantId: string): Promise<{ severity: Severity; count: number }[]> {
+    const { rows } = await this.pool.query<{ severity: Severity; count: number }>(
+      `SELECT severity, COUNT(*)::int AS count
+         FROM alerts
+        WHERE tenant_id = $1
+          AND status = 'open'
+        GROUP BY severity`,
+      [tenantId],
+    );
+    return rows;
   }
 
   async findById(id: number, tenantId: string): Promise<Alert | undefined> {
