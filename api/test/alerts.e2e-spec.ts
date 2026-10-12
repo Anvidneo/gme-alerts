@@ -412,4 +412,21 @@ describe('Alertas (e2e)', () => {
       });
     });
   });
+
+  describe('GET /me', () => {
+    it('rechaza peticiones sin token o con token inválido', async () => {
+      await request(app.getHttpServer()).get('/api/me').expect(401);
+      await request(app.getHttpServer()).get('/api/me').set(as('no-existe')).expect(401);
+    });
+
+    it.each([
+      ['dev-norte-admin', { id: 'u-norte-admin', tenantId: 'dist-norte', name: 'Laura Gómez', role: 'admin' }],
+      ['dev-norte-viewer', { id: 'u-norte-view', tenantId: 'dist-norte', name: 'Camila Ríos', role: 'viewer' }],
+      ['dev-sur-operator', { id: 'u-sur-op', tenantId: 'dist-sur', name: 'Valentina Mejía', role: 'operator' }],
+    ])('devuelve el usuario y el rol del token %s', async (token, user) => {
+      const res = await request(app.getHttpServer()).get('/api/me').set(as(token)).expect(200);
+
+      expect(res.body).toEqual(user);
+    });
+  });
 });
